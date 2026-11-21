@@ -1,0 +1,80 @@
+name: fork-build-app
+
+# Manual-only. Builds CodexBar.app and the codexbar CLI ad-hoc signed (no secrets,
+# no notarization) on a GitHub-hosted macOS runner and uploads them as an artifact.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref (branch, tag or SHA) of this repository to build
+        required: false
+        default: main
+      runner:
+        description: Runner label (upstream uses the hosted preview label xcode-27)
+        required: false
+        default: xcode-27
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 120
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+      CODEXBAR_SIGNING: adhoc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Select Xcode 27 when present
+        run: |
+          set -euo pipefail
+          if [[ -d /Applications/Xcode_27.0.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_27.0.app/Contents/Developer
+            echo "DEVELOPER_DIR=/Applications/Xcode_27.0.app/Contents/Developer" >> "$GITHUB_ENV"
+          fi
+          /usr/bin/xcodebuild -version
+          swift --version
+          xcrun --sdk macosx --show-sdk-version
+      - name: Install widget project generator
+        run: brew install xcodegen
+      - name: Build and ad-hoc sign CodexBar.app
+        env:
+          CODEXBAR_WIDGET_EXTENSION_TIMEOUT_SECONDS: "3600"
+        run: ./Scripts/package_app.sh release
+      - name: Assemble artifact
+        run: |
+          set -euo pipefail
+          source version.env
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out/cli"
+          ditto CodexBar.app "$out/CodexBar.app"
+          # Standalone CLI: binary plus the resource bundle it resolves beside itself.
+          cp CodexBar.app/Contents/Helpers/CodexBarCLI "$out/cli/codexbar"
+          cp -R CodexBar.app/Contents/Helpers/CodexBar_CodexBarCore.bundle "$out/cli/"
+          codesign --force --sign - "$out/cli/codexbar"
+          {
+            echo "ref=${{ inputs.ref }}"
+            echo "sha=$(git rev-parse HEAD)"
+            echo "marketing_version=$MARKETING_VERSION"
+            echo "build_number=$BUILD_NUMBER"
+            echo "runner_os=$(sw_vers -productVersion)"
+            echo "xcode=$(/usr/bin/xcodebuild -version | tr '\n' ' ')"
+          } > "$out/BUILD-INFO.txt"
+          (cd "$out" && ditto -c -k --keepParent CodexBar.app "$GITHUB_WORKSPACE/CodexBar-adhoc.zip" \
+            && ditto -c -k --keepParent cli "$GITHUB_WORKSPACE/codexbar-cli.zip")
+          cp "$out/BUILD-INFO.txt" "$GITHUB_WORKSPACE/BUILD-INFO.txt"
+          codesign -dv CodexBar.app 2>&1 | head -20
+          "$out/cli/codexbar" --version || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: codexbar-fork-build
+          path: |
+            CodexBar-adhoc.zip
+            codexbar-cli.zip
+            BUILD-INFO.txt
+          retention-days: 14
+          if-no-files-found: error
