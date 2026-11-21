@@ -3,11 +3,6 @@ name: fork-build-app
 # Manual-only. Builds CodexBar.app and the codexbar CLI ad-hoc signed (no secrets,
 # no notarization) on a GitHub-hosted macOS runner and uploads them as an artifact.
 on:
-  # TEMPORARY bootstrap: GitHub only registers a new workflow once it exists on the default
-  # branch or has triggered a run; this branch-only push trigger is removed again right after.
-  push:
-    branches: [ci/fork-build-app]
-    paths: ['.github/workflows/fork-build-app.yml']
   workflow_dispatch:
     inputs:
       ref:
@@ -24,7 +19,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ${{ inputs.runner || 'xcode-27' }}
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 120
     env:
       MACOSX_DEPLOYMENT_TARGET: "14.0"
